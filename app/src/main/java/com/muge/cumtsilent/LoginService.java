@@ -27,7 +27,7 @@ public class LoginService extends IntentService {
         String isp = Prefs.isp(this);
 
         PortalClient client = new PortalClient();
-        PortalClient.Result result = client.login(username, password, isp);
+        PortalClient.Result result = client.login(this, username, password, isp);
         Notifier.showResult(this, result);
     }
 }
