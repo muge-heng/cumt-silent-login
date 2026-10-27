@@ -1,10 +1,5 @@
 package com.muge.cumtsilent;
 
-import android.content.Context;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
-
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -64,11 +59,8 @@ public class PortalClient {
                     + "AppleWebKit/537.36 (KHTML, like Gecko) "
                     + "Chrome/124.0.0.0 Safari/537.36";
 
-    /** 登录并判定结果：先看登录前是否已在线，再发 ePortal 请求解析返回码。 */
-    public Result login(Context ctx, String username, String password, String isp) {
-        // 登录前系统就把当前校园 Wi-Fi 判为“可上网”，说明这个终端 IP 早已在线——与门户返回码无关。
-        boolean onlineBefore = isCampusOnline(ctx);
-
+    /** 登录并判定结果：完全以门户 JSONP 返回码为准（不再用外网探测兜底，否则会把“已在线”误判成“登录成功”）。 */
+    public Result login(String username, String password, String isp) {
         String suffix = ISP_SUFFIX.containsKey(isp) ? ISP_SUFFIX.get(isp) : "";
         long ts = System.currentTimeMillis();
         String callback = "dr" + ts + (100 + new Random().nextInt(900));
@@ -108,37 +100,8 @@ public class PortalClient {
             return new Result(Status.NOT_CONNECTED, "无法连接校园网门户（10.2.5.251），请确认已连接到校园 Wi-Fi。", null);
         }
 
-        // 登录前就已在线 -> 直接判为“已在线”，不再看返回码。
-        if (onlineBefore) {
-            return new Result(Status.ALREADY_ONLINE, "终端 IP 已在线，无需重复登录。", body);
-        }
-
-        Result parsed = interpret(httpCode, body);
-        // 未在线时以门户返回为准：只有明确 result:1 才算“登录成功”，ret_code:2 算“已在线”。
-        if (parsed.status == Status.SUCCESS || parsed.status == Status.ALREADY_ONLINE) {
-            return parsed;
-        }
-        // 返回无法确认，但此刻外网已连通：说明这次登录生效了 -> 登录成功。
-        if (httpCode == 200 && isOnline()) {
-            return new Result(Status.SUCCESS, "登录请求已生效，外网已连通。", body);
-        }
-        return parsed;
-    }
-
-    /** 当前活动网络是否为“已放行的校园 Wi-Fi”（系统已判定可上网 = 之前就已在线）。 */
-    static boolean isCampusOnline(Context ctx) {
-        try {
-            ConnectivityManager cm = ctx.getSystemService(ConnectivityManager.class);
-            if (cm == null) return false;
-            Network net = cm.getActiveNetwork();
-            if (net == null) return false;
-            NetworkCapabilities caps = cm.getNetworkCapabilities(net);
-            if (caps == null) return false;
-            return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
-        } catch (Exception e) {
-            return false;
-        }
+        // 只信门户返回：result:1=登录成功；result:0&ret_code:2=已在线；result:0&其它=认证未通过。
+        return interpret(httpCode, body);
     }
 
     /**
@@ -190,54 +153,21 @@ public class PortalClient {
         return body;
     }
 
-    /** 探一次真实外网连通（HEAD baidu / gstatic 204），作为返回含义不明确时的兜底判据。 */
-    private boolean isOnline() {
-        String[] probes = {
-                "https://www.baidu.com",
-                "https://connectivitycheck.gstatic.com/generate_204",
-        };
-        for (String p : probes) {
-            try {
-                HttpURLConnection c = (HttpURLConnection) new URL(p).openConnection();
-                c.setRequestMethod("HEAD");
-                c.setRequestProperty("User-Agent", USER_AGENT);
-                c.setConnectTimeout(3000);
-                c.setReadTimeout(3000);
-                c.setInstanceFollowRedirects(false);
-                int code = c.getResponseCode();
-                c.disconnect();
-                if (code >= 200 && code < 400) {
-                    return true;
-                }
-            } catch (Exception e) {
-                try {
-                    HttpURLConnection c = (HttpURLConnection) new URL(p).openConnection();
-                    c.setRequestMethod("GET");
-                    c.setConnectTimeout(3000);
-                    c.setReadTimeout(3000);
-                    c.setRequestProperty("User-Agent", USER_AGENT);
-                    c.getResponseCode();
-                    c.disconnect();
-                    return true;
-                } catch (Exception ignore) {
-                    // 继续下一个探针
-                }
-            }
-        }
-        return false;
-    }
-
-    /** 取本机 site-local IPv4；失败退回 10.0.0.1。 */
+    /** 取本机 site-local IPv4，优先 Wi‑Fi(wlan*) 接口；失败退回 10.0.0.1。 */
     static String localIp() {
         try {
+            String fallback = null;
             for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
                 if (!ni.isUp() || ni.isLoopback()) continue;
+                boolean wifi = ni.getName() != null && ni.getName().startsWith("wlan");
                 for (InetAddress addr : Collections.list(ni.getInetAddresses())) {
                     if (addr instanceof Inet4Address && addr.isSiteLocalAddress()) {
-                        return addr.getHostAddress();
+                        if (wifi) return addr.getHostAddress();
+                        if (fallback == null) fallback = addr.getHostAddress();
                     }
                 }
             }
+            if (fallback != null) return fallback;
         } catch (Exception ignore) {
         }
         return "10.0.0.1";
