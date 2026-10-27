@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">校园网无感登录</string>
+    <string name="screen_title">校园网登录</string>
+    <string name="screen_subtitle">首次填写账号并登录后，之后打开即自动无感完成。</string>
+    <string name="hint_username">账号 / 学号</string>
+    <string name="hint_password">校园网密码</string>
+    <string name="label_isp">运营商</string>
+    <string name="action_login">立即登录</string>
+</resources>
