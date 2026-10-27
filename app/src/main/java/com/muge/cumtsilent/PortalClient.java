@@ -1,5 +1,10 @@
 package com.muge.cumtsilent;
 
+import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -59,8 +64,11 @@ public class PortalClient {
                     + "AppleWebKit/537.36 (KHTML, like Gecko) "
                     + "Chrome/124.0.0.0 Safari/537.36";
 
-    /** 登录并判定结果：先发 ePortal 请求，解析 JSONP 正文；若无法确认再探一次外网连通性。 */
-    public Result login(String username, String password, String isp) {
+    /** 登录并判定结果：先看登录前是否已在线，再发 ePortal 请求解析返回码。 */
+    public Result login(Context ctx, String username, String password, String isp) {
+        // 登录前系统就把当前校园 Wi-Fi 判为“可上网”，说明这个终端 IP 早已在线——与门户返回码无关。
+        boolean onlineBefore = isCampusOnline(ctx);
+
         String suffix = ISP_SUFFIX.containsKey(isp) ? ISP_SUFFIX.get(isp) : "";
         long ts = System.currentTimeMillis();
         String callback = "dr" + ts + (100 + new Random().nextInt(900));
@@ -100,15 +108,37 @@ public class PortalClient {
             return new Result(Status.NOT_CONNECTED, "无法连接校园网门户（10.2.5.251），请确认已连接到校园 Wi-Fi。", null);
         }
 
+        // 登录前就已在线 -> 直接判为“已在线”，不再看返回码。
+        if (onlineBefore) {
+            return new Result(Status.ALREADY_ONLINE, "终端 IP 已在线，无需重复登录。", body);
+        }
+
         Result parsed = interpret(httpCode, body);
+        // 未在线时以门户返回为准：只有明确 result:1 才算“登录成功”，ret_code:2 算“已在线”。
         if (parsed.status == Status.SUCCESS || parsed.status == Status.ALREADY_ONLINE) {
             return parsed;
         }
-        // 门户返回了但含义不明确：以一次真实外网探测作为最终判据。
+        // 返回无法确认，但此刻外网已连通：说明这次登录生效了 -> 登录成功。
         if (httpCode == 200 && isOnline()) {
             return new Result(Status.SUCCESS, "登录请求已生效，外网已连通。", body);
         }
         return parsed;
+    }
+
+    /** 当前活动网络是否为“已放行的校园 Wi-Fi”（系统已判定可上网 = 之前就已在线）。 */
+    static boolean isCampusOnline(Context ctx) {
+        try {
+            ConnectivityManager cm = ctx.getSystemService(ConnectivityManager.class);
+            if (cm == null) return false;
+            Network net = cm.getActiveNetwork();
+            if (net == null) return false;
+            NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+            if (caps == null) return false;
+            return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
