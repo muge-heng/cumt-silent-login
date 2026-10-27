@@ -62,18 +62,11 @@ public final class Notifier {
                 body = r.message == null ? "已发送登录请求，但无法确认结果。" : r.message;
         }
 
-        // 调试期：把门户原始返回码附在通知里，便于确认真实返回，稳定后移除。
-        boolean debugShowRaw = true;
-        String raw = (r.rawBody == null) ? "" : r.rawBody.trim();
-        String bigText = debugShowRaw
-                ? body + "\n\n[调试·门户返回 " + r.status + "] " + (raw.isEmpty() ? "(空)" : raw)
-                : body;
-
         Notification n = new Notification.Builder(c, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_wifi)
                 .setContentTitle(title)
-                .setContentText(debugShowRaw && !raw.isEmpty() ? raw : body)
-                .setStyle(new Notification.BigTextStyle().bigText(bigText))
+                .setContentText(body)
+                .setStyle(new Notification.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
                 .build();
