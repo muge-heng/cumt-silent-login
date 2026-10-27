@@ -15,8 +15,9 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * 复刻 campus-checkin-kit/campus_network.py 的 CUMT ePortal 登录机制（Dr.COM 风格 JSONP）。
- * 该门户是私有地址，只有连上校园网时才可达；认证靠 DDDDD+upass，wlan_user_ip/mac 仅为 AC 侧信息位。
+ * CUMT（中国矿业大学）ePortal 登录客户端（Dr.COM 风格 JSONP）。
+ * 该门户是内网私有地址，只有连上校园 Wi-Fi 时才可达；认证靠 DDDDD(账号+后缀)+upass(密码)，
+ * wlan_user_ip / mac 仅为接入侧信息位，不参与校验。
  */
 public class PortalClient {
 
@@ -44,7 +45,7 @@ public class PortalClient {
 
     private static final String EPORTAL_LOGIN_URL_BASE = "http://10.2.5.251:801/eportal/";
 
-    // 运营商 -> 账号后缀，与源项目 ISP_ACCOUNT_SUFFIX_MAP 完全一致
+    // 运营商 -> 账号后缀；登录地址不变，只是账号尾部拼不同后缀
     public static final Map<String, String> ISP_SUFFIX = new LinkedHashMap<>();
     static {
         ISP_SUFFIX.put("校园网", "");
@@ -110,7 +111,12 @@ public class PortalClient {
         return parsed;
     }
 
-    /** 解析 JSONP：callback({...}) 里的 result / auth_fail_info。 */
+    /**
+     * 解析 CUMT ePortal 的 JSONP 返回（result 为字符串码）：
+     *   {"result":"1","msg":"认证成功"}           -> 登录成功
+     *   {"result":"0","msg":"","ret_code":"2"}    -> 终端 IP 已在线（已登录）
+     *   {"result":"0", ...ret_code != 2...}       -> 认证未通过（账号/密码等），尽量带上 msg
+     */
     private Result interpret(int httpCode, String body) {
         if (httpCode >= 500) {
             return new Result(Status.SERVER_ERROR, "门户服务器返回 " + httpCode + "。", body);
@@ -121,27 +127,26 @@ public class PortalClient {
         String json = stripJsonp(body);
         try {
             org.json.JSONObject obj = new org.json.JSONObject(json);
-            String result = obj.optString("result", "");
+            String result = obj.optString("result", "").trim();
+            String retCode = obj.optString("ret_code", "").trim();
+            String msg = obj.optString("msg", "").trim();
+
+            if ("1".equals(result)) {
+                return new Result(Status.SUCCESS, msg.isEmpty() ? "登录成功。" : msg, body);
+            }
+            if ("0".equals(result)) {
+                if ("2".equals(retCode)) {
+                    return new Result(Status.ALREADY_ONLINE, "终端 IP 已在线，无需重复登录。", body);
+                }
+                return new Result(Status.BAD_CREDENTIALS,
+                        msg.isEmpty() ? ("认证未通过（ret_code=" + retCode + "）。") : msg, body);
+            }
+            // 兼容其它门户写法
             if ("ok".equalsIgnoreCase(result) || "success".equalsIgnoreCase(result)) {
                 return new Result(Status.SUCCESS, "登录成功。", body);
             }
-            org.json.JSONObject fail = obj.optJSONObject("auth_fail_info");
-            if (fail != null) {
-                String code = fail.optString("result_code", fail.optString("tips_code", ""));
-                if ("6".equals(code) || "692".equals(code)) {
-                    return new Result(Status.ALREADY_ONLINE, "已在线，无需重复登录。", body);
-                }
-                return new Result(Status.BAD_CREDENTIALS, "账号或密码可能不正确（result_code=" + code + "）。", body);
-            }
-            String userMsg = obj.optString("user_msg", "");
-            if (!userMsg.isEmpty()) {
-                return new Result(Status.UNKNOWN, userMsg, body);
-            }
         } catch (Exception ignore) {
             // 非 JSON 正文：落到外层外网探测兜底
-        }
-        if (body.toLowerCase().contains("result\\\":\\\"ok") || body.toLowerCase().contains("\"result\":\"ok\"")) {
-            return new Result(Status.SUCCESS, "登录成功。", body);
         }
         return new Result(Status.UNKNOWN, "无法识别门户返回。", body);
     }
@@ -155,7 +160,7 @@ public class PortalClient {
         return body;
     }
 
-    /** 探一次真实外网连通（HEAD baidu / gstatic 204），沿用源项目 check_connectivity 思路。 */
+    /** 探一次真实外网连通（HEAD baidu / gstatic 204），作为返回含义不明确时的兜底判据。 */
     private boolean isOnline() {
         String[] probes = {
                 "https://www.baidu.com",
@@ -192,7 +197,7 @@ public class PortalClient {
         return false;
     }
 
-    /** 取本机 site-local IPv4；失败退回 10.0.0.1（与源项目 local_ip 一致的兜底）。 */
+    /** 取本机 site-local IPv4；失败退回 10.0.0.1。 */
     static String localIp() {
         try {
             for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
