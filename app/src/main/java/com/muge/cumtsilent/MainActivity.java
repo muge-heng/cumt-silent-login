@@ -77,7 +77,7 @@ public class MainActivity extends Activity {
         statusText.setText("正在登录校园网…");
 
         new Thread(() -> {
-            PortalClient.Result r = new PortalClient().login(username, password, isp);
+            PortalClient.Result r = new PortalClient().login(MainActivity.this, username, password, isp);
             Notifier.showResult(this, r);
             runOnUiThread(() -> {
                 running = false;
